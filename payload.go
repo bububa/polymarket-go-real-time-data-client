@@ -26,7 +26,7 @@ type Trade struct {
 	Pseudonym       string          `json:"pseudonym"`       // Pseudonym of the user
 	Side            Side            `json:"side"`            // Side of the trade (BUY/SELL)
 	Size            decimal.Decimal `json:"size"`            // Size of the trade
-	Status          TradeStatus     `json:"status"`          //Status of the match: e.g., MINED
+	Status          TradeStatus     `json:"status"`          // Status of the match: e.g., MINED
 	Slug            string          `json:"slug"`            // Slug of the market
 	Timestamp       int64           `json:"timestamp"`       // Timestamp of the trade (milliseconds)
 	Time            time.Time       `json:"-"`               // Parsed time from timestamp
@@ -223,41 +223,48 @@ func (e *EquityPrice) UnmarshalJSON(data []byte) error {
 
 // CLOBOrder represents a CLOB user order.
 type CLOBOrder struct {
-	AssetID      string          `json:"asset_id"`      // Order's ERC1155 token ID of conditional token
-	CreatedAt    string          `json:"created_at"`    // Order's creation UNIX timestamp
-	Expiration   string          `json:"expiration"`    // Order's expiration UNIX timestamp
-	ID           string          `json:"id"`            // Unique order hash identifier
-	MakerAddress string          `json:"maker_address"` // Maker's address (funder)
-	Market       string          `json:"market"`        // Condition ID or market identifier
-	OrderType    string          `json:"order_type"`    // Type of order: GTC, GTD, FOK, FAK
-	OriginalSize decimal.Decimal `json:"original_size"` // Original size of the order at placement
-	Outcome      string          `json:"outcome"`       // Order outcome: YES / NO
-	Owner        string          `json:"owner"`         // UUID of the order owner
-	Price        decimal.Decimal `json:"price"`         // Order price (e.g., in decimals like 0.5)
-	Side         Side            `json:"side"`          // Side of the trade: BUY or SELL
-	SizeMatched  decimal.Decimal `json:"size_matched"`  // Amount of order that has been matched
-	Status       string          `json:"status"`        // Status of the order (e.g., MATCHED)
-	Type         string          `json:"type"`          // Type of update: PLACEMENT, CANCELLATION, FILL, etc.
+	AssetID         string          `json:"asset_id"`                   // Order's ERC1155 token ID of conditional token
+	CreatedAt       string          `json:"created_at"`                 // Order's creation UNIX timestamp
+	Expiration      string          `json:"expiration"`                 // Order's expiration UNIX timestamp
+	ID              string          `json:"id"`                         // Unique order hash identifier
+	MakerAddress    string          `json:"maker_address"`              // Maker's address (funder)
+	Market          string          `json:"market"`                     // Condition ID or market identifier
+	OrderType       string          `json:"order_type"`                 // Type of order: GTC, GTD, FOK, FAK
+	OrderOwner      string          `json:"order_owner,omitempty"`      //
+	OriginalSize    decimal.Decimal `json:"original_size"`              // Original size of the order at placement
+	Outcome         string          `json:"outcome"`                    // Order outcome: YES / NO
+	Owner           string          `json:"owner"`                      // UUID of the order owner
+	Price           decimal.Decimal `json:"price"`                      // Order price (e.g., in decimals like 0.5)
+	Side            Side            `json:"side"`                       // Side of the trade: BUY or SELL
+	SizeMatched     decimal.Decimal `json:"size_matched"`               // Amount of order that has been matched
+	Status          string          `json:"status"`                     // Status of the order (e.g., MATCHED)
+	Type            string          `json:"type"`                       // Type of update: PLACEMENT, CANCELLATION, FILL, etc.
+	AssociateTrades []string        `json:"associate_trades,omitempty"` // Trade IDs this order has been matched in
+	Timestamp       string          `json:"timestamp"`                  // Event timestamp in milliseconds
 }
 
 // CLOBTrade represents a CLOB user trade.
 type CLOBTrade struct {
-	AssetID         string           `json:"asset_id"`         // ERC1155 token ID of the conditional token involved in the trade
-	FeeRateBps      decimal.Decimal  `json:"fee_rate_bps"`     // Fee rate in basis points (bps)
-	ID              string           `json:"id"`               // Unique identifier for the match record
-	LastUpdate      string           `json:"last_update"`      // Last update timestamp (UNIX)
-	MakerAddress    string           `json:"maker_address"`    // Maker's address
-	MakerOrders     []CLOBMakerOrder `json:"maker_orders"`     // List of maker orders
-	Market          string           `json:"market"`           // Condition ID or market identifier
-	MatchTime       string           `json:"match_time"`       // Match execution timestamp (UNIX)
-	Outcome         string           `json:"outcome"`          // Outcome of the market: YES / NO
-	Owner           string           `json:"owner"`            // UUID of the taker (owner of the matched order)
+	AssetID         string           `json:"asset_id"`      // ERC1155 token ID of the conditional token involved in the trade
+	FeeRateBps      decimal.Decimal  `json:"fee_rate_bps"`  // Fee rate in basis points (bps)
+	ID              string           `json:"id"`            // Unique identifier for the match record
+	LastUpdate      string           `json:"last_update"`   // Last update timestamp (UNIX)
+	MakerAddress    string           `json:"maker_address"` // Maker's address
+	MakerOrders     []CLOBMakerOrder `json:"maker_orders"`  // List of maker orders
+	Market          string           `json:"market"`        // Condition ID or market identifier
+	MatchTime       string           `json:"matchtime"`     // Match execution timestamp (UNIX)
+	Outcome         string           `json:"outcome"`       // Outcome of the market: YES / NO
+	Owner           string           `json:"owner"`         // UUID of the taker (owner of the matched order)
+	TradeOwner      string           `json:"trade_owner,omitempty"`
 	Price           decimal.Decimal  `json:"price"`            // Matched price (in decimal format, e.g., 0.5)
 	Side            Side             `json:"side"`             // Taker side of the trade: BUY or SELL
 	Size            decimal.Decimal  `json:"size"`             // Total matched size
 	Status          TradeStatus      `json:"status"`           // Status of the match: e.g., MINED
 	TakerOrderID    string           `json:"taker_order_id"`   // ID of the taker's order
 	TransactionHash string           `json:"transaction_hash"` // Transaction hash where the match was settled
+	BucketIndex     int              `json:"bucket_index,omitempty"`
+	TraderSide      string           `json:"trader_side,omitempty"` // Whether the receiving user was TAKER or MAKER, Available options: TAKER, MAKER
+	Timestamp       string           `json:"timestamp"`             // Event timestamp in milliseconds
 }
 
 // CLOBMakerOrder represents a maker order in a CLOB trade.
