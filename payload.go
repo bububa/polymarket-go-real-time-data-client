@@ -319,28 +319,67 @@ type OrderbookLevel struct {
 
 // LastTradePrice represents CLOB market last trade price.
 type LastTradePrice struct {
-	AssetID    string          `json:"asset_id"`     // Asset Id identifier
-	FeeRateBps decimal.Decimal `json:"fee_rate_bps"` // Fee rate in basis points (bps)
-	Market     string          `json:"market"`       // Market or condition ID
-	Price      decimal.Decimal `json:"price"`        // Trade price (e.g., 0.5)
-	Side       Side            `json:"side"`         // Side of the order: BUY or SELL
-	Size       decimal.Decimal `json:"size"`         // Size of the trade
+	AssetID         string          `json:"asset_id"`     // Asset Id identifier
+	FeeRateBps      decimal.Decimal `json:"fee_rate_bps"` // Fee rate in basis points (bps)
+	Market          string          `json:"market"`       // Market or condition ID
+	Price           decimal.Decimal `json:"price"`        // Trade price (e.g., 0.5)
+	Side            Side            `json:"side"`         // Side of the order: BUY or SELL
+	Size            decimal.Decimal `json:"size"`         // Size of the trade
+	Timestamp       string          `json:"timestamp"`
+	TransactionHash string          `json:"transaction_hash"`
 }
 
 // TickSizeChange represents CLOB market tick size changes.
 type TickSizeChange struct {
 	Market      string          `json:"market"`        // Market or condition ID
-	AssetID     []string        `json:"asset_id"`      // Array of two ERC1155 asset ID
+	AssetID     string          `json:"asset_id"`      // Array of two ERC1155 asset ID
 	OldTickSize decimal.Decimal `json:"old_tick_size"` // Previous tick size before the change
 	NewTickSize decimal.Decimal `json:"new_tick_size"` // Updated tick size after the change
+	Timestamp   string          `json:"timestamp"`
+}
+
+// BestBidAsk represents CLOB market best bid/ask
+type BestBidAsk struct {
+	Market    string          `json:"market"` // Market or condition ID
+	AssetID   string          `json:"asset_id"`
+	BestBid   decimal.Decimal `json:"best_bid"`
+	BestAsk   decimal.Decimal `json:"best_ask"`
+	Spread    decimal.Decimal `json:"spread"`
+	Timestamp string          `json:"timestamp"`
 }
 
 // ClobMarket represents CLOB market information.
 // This is used for both market_created and market_resolved message types.
 type ClobMarket struct {
-	Market       string          `json:"market"`         // Market or condition ID
-	AssetIDs     []string        `json:"asset_ids"`      // Array of two ERC1155 asset ID identifiers associated with market
-	MinOrderSize decimal.Decimal `json:"min_order_size"` // Minimum size allowed for an order
-	TickSize     decimal.Decimal `json:"tick_size"`      // Minimum allowable price increment
-	NegRisk      bool            `json:"neg_risk"`       // Indicates if the market is negative risk
+	ID                    string                   `json:"id"`
+	Question              string                   `json:"question"`
+	Market                string                   `json:"market"` // Market or condition ID
+	Slug                  string                   `json:"slug"`
+	Description           string                   `json:"description"`
+	AssetIDs              []string                 `json:"asset_ids"` // Array of two ERC1155 asset ID identifiers associated with market
+	Outcomes              []string                 `json:"outcomes,omitempty"`
+	EventMessage          []ClobMarketEventMessage `json:"event_message"` // Parent event metadata for grouped markets
+	Timestamp             string                   `json:"timestamp"`
+	Tags                  []string                 `json:"tags"`
+	ConditionID           string                   `json:"condition_id"`
+	Active                bool                     `json:"active"`
+	ClobTokenIDs          []string                 `json:"clob_token_ids"`
+	SportsMarketType      string                   `json:"sports_market_type"`        // Sports market type such as spread or moneyline
+	Line                  string                   `json:"line"`                      // Betting line value, or an empty string when not applicable
+	GameStartTime         string                   `json:"game_start_time"`           // Game start time in RFC3339 format, or an empty string when not applicable
+	OrderPriceMinTickSize decimal.Decimal          `json:"order_price_min_tick_size"` // Minimum tick size for order prices
+	GroupItemTitle        string                   `json:"group_item_title"`          // Display title for the group item
+	WinningAssetID        string                   `json:"winning_asset_id"`
+	WinningOutcome        string                   `json:"winning_outcome"`
+	MinOrderSize          decimal.Decimal          `json:"min_order_size"` // Minimum size allowed for an order
+	TickSize              decimal.Decimal          `json:"tick_size"`      // Minimum allowable price increment
+	NegRisk               bool                     `json:"neg_risk"`       // Indicates if the market is negative risk
+}
+
+type ClobMarketEventMessage struct {
+	ID           string `json:"id"`
+	Ticker       string `json:"ticker"`
+	Slug         string `json:"slug"`
+	Title        string `json:"title"`
+	Descriptio0n string `json:"description"`
 }

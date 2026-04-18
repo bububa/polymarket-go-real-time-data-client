@@ -80,9 +80,9 @@ const (
 	MessageTypeBestBidAsk MessageType = "best_bid_ask"
 
 	// Aliases for backward compatibility and clarity
-	MessageTypeCLOBOrder         = MessageTypeOrder
-	MessageTypeCLOBTrade         = MessageTypeTrade
-	MessageTypeCLOBPriceChanges  = MessageTypePriceChange
-	MessageTypeCLOBAggOrderbook  = MessageTypeAggOrderbook
+	MessageTypeCLOBOrder          = MessageTypeOrder
+	MessageTypeCLOBTrade          = MessageTypeTrade
+	MessageTypeCLOBPriceChanges   = MessageTypePriceChange
+	MessageTypeCLOBAggOrderbook   = MessageTypeAggOrderbook
 	MessageTypeCLOBLastTradePrice = MessageTypeLastTradePrice
 )

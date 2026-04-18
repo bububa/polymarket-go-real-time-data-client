@@ -71,7 +71,7 @@ func (p *clobProtocol) FormatSubscription(subscriptions []Subscription) ([]byte,
 			return nil, fmt.Errorf("at least one asset_id is required for market subscription")
 		}
 
-		msg := map[string]interface{}{
+		msg := map[string]any{
 			"assets_ids": tokenIDs,
 			"operation":  "subscribe",
 		}
@@ -80,7 +80,7 @@ func (p *clobProtocol) FormatSubscription(subscriptions []Subscription) ([]byte,
 	case TopicClobUser:
 		// User channel uses markets, type: "user", and auth
 		// According to official Python example: {"markets": [...], "type": "user", "auth": {...}}
-		msg := map[string]interface{}{
+		msg := map[string]any{
 			"type": "user",
 		}
 		if sub.Filters != "" {
@@ -93,7 +93,7 @@ func (p *clobProtocol) FormatSubscription(subscriptions []Subscription) ([]byte,
 		}
 		// Add auth if provided
 		if sub.ClobAuth != nil {
-			msg["auth"] = map[string]interface{}{
+			msg["auth"] = map[string]any{
 				"apiKey":     sub.ClobAuth.Key,
 				"secret":     sub.ClobAuth.Secret,
 				"passphrase": sub.ClobAuth.Passphrase,
@@ -140,7 +140,6 @@ func (p *clobProtocol) ParseMessage(data []byte) (*Message, error) {
 
 // parseClobMessage parses a single CLOB message object
 func (p *clobProtocol) parseClobMessage(clobMsg map[string]interface{}, originalData []byte) (*Message, error) {
-
 	// Try to extract topic and type from CLOB message
 	// This is a best-effort conversion - actual format may vary
 	result := &Message{}
@@ -214,25 +213,25 @@ func (p *clobProtocol) parseClobMessage(clobMsg map[string]interface{}, original
 	if result.Topic == "" || result.Type == "" {
 		// If we can't determine topic/type, store entire message as payload
 		result.Payload = originalData
-		} else {
-			// Store the data part as payload
-			if payload, ok := clobMsg["data"]; ok {
-				payloadBytes, err := json.Marshal(payload)
-				if err == nil {
-					result.Payload = payloadBytes
-				} else {
-					result.Payload = originalData
-				}
+	} else {
+		// Store the data part as payload
+		if payload, ok := clobMsg["data"]; ok {
+			payloadBytes, err := json.Marshal(payload)
+			if err == nil {
+				result.Payload = payloadBytes
 			} else {
-				// Store the entire clobMsg as payload
-				clobMsgBytes, err := json.Marshal(clobMsg)
-				if err == nil {
-					result.Payload = clobMsgBytes
-				} else {
-					result.Payload = originalData
-				}
+				result.Payload = originalData
+			}
+		} else {
+			// Store the entire clobMsg as payload
+			clobMsgBytes, err := json.Marshal(clobMsg)
+			if err == nil {
+				result.Payload = clobMsgBytes
+			} else {
+				result.Payload = originalData
 			}
 		}
+	}
 
 	// Extract timestamp if available
 	if ts, ok := clobMsg["timestamp"].(float64); ok {

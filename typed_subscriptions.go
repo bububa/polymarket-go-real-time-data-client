@@ -721,6 +721,40 @@ func (h *RealtimeTypedSubscriptionHandler) SubscribeToCLOBMarketTickSizeChange(f
 	})
 }
 
+// BestBidAskCallback is the callback function for best bid messages
+type BestBidAskCallback func(change BestBidAsk) error
+
+// SubscribeToCLOBMarketBestBidAsk subscribes to CLOB market best bid/ask
+//
+// This topic SUPPORTS multiple subscriptions in a single connection.
+// You can subscribe to multiple token IDs and receive data for all of them.
+//
+// Filter format: ["100","200",...] (array of token IDs as strings)
+// filter: CLOBMarketFilter with token IDs (REQUIRED)
+func (h *RealtimeTypedSubscriptionHandler) SubscribeToCLOBMarketBestBidAsk(filter *CLOBMarketFilter, callback BestBidAskCallback) error {
+	if filter == nil {
+		return fmt.Errorf("filter is required for best bid/ask subscription")
+	}
+
+	// Register callback to internal router if provided
+	if callback != nil {
+		h.router.RegisterBestBidAskHandler(callback)
+	}
+
+	filterStr, err := filter.ToJSON()
+	if err != nil {
+		return fmt.Errorf("failed to convert filter to JSON: %w", err)
+	}
+
+	return h.client.Subscribe([]Subscription{
+		{
+			Topic:   TopicClobMarket,
+			Type:    MessageTypeBestBidAsk,
+			Filters: filterStr,
+		},
+	})
+}
+
 // ClobMarketCallback is the callback function for CLOB market messages
 type ClobMarketCallback func(market ClobMarket) error
 
@@ -791,6 +825,7 @@ type RealtimeMessageRouter struct {
 	aggOrderbookHandlers   []AggOrderbookCallback
 	lastTradePriceHandlers []LastTradePriceCallback
 	tickSizeChangeHandlers []TickSizeChangeCallback
+	bestBidAskHandlers     []BestBidAskCallback
 	clobMarketHandlers     []ClobMarketCallback
 }
 
@@ -877,6 +912,11 @@ func (r *RealtimeMessageRouter) RegisterLastTradePriceHandler(handler LastTradeP
 // RegisterTickSizeChangeHandler registers a handler for tick size changes
 func (r *RealtimeMessageRouter) RegisterTickSizeChangeHandler(handler TickSizeChangeCallback) {
 	r.tickSizeChangeHandlers = append(r.tickSizeChangeHandlers, handler)
+}
+
+// RegisterBestBidAskHandler registers a handler for best bid/ask
+func (r *RealtimeMessageRouter) RegisterBestBidAskHandler(handler BestBidAskCallback) {
+	r.bestBidAskHandlers = append(r.bestBidAskHandlers, handler)
 }
 
 // RegisterClobMarketHandler registers a handler for CLOB market events
