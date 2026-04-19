@@ -2,6 +2,7 @@ package polymarketrealtime
 
 import (
 	"fmt"
+	"sync"
 	"time"
 )
 
@@ -52,6 +53,7 @@ type Client struct {
 	*baseClient
 
 	// CLOB connections (one for market, one for user)
+	clobMu           sync.Mutex
 	clobMarketClient *baseClient
 	clobUserClient   *baseClient
 
@@ -235,6 +237,9 @@ func (c *Client) subscribeToClob(subscriptions []Subscription) error {
 
 	var errs []error
 
+	c.clobMu.Lock()
+	defer c.clobMu.Unlock()
+
 	// Handle market subscriptions
 	if len(marketSubs) > 0 {
 		if c.clobMarketClient == nil {
@@ -331,6 +336,9 @@ func (c *Client) unsubscribeFromClob(subscriptions []Subscription) error {
 			userSubs = append(userSubs, sub)
 		}
 	}
+
+	c.clobMu.Lock()
+	defer c.clobMu.Unlock()
 
 	var errs []error
 
