@@ -115,83 +115,93 @@ func newBaseClient(protocol Protocol, opts ...ClientOption) *baseClient {
 
 // connect establishes the WebSocket connection
 func (c *baseClient) connect() error {
-	c.connMu.Lock()
-	defer c.connMu.Unlock()
+	var onConnect func()
 
-	// Restore autoReconnect to the initial configured value
-	// This ensures that after a Disconnect()/Connect() cycle, auto-reconnect is re-enabled
-	c.internal.mu.Lock()
-	c.autoReconnect = c.autoReconnectConfig
-	c.internal.mu.Unlock()
+	err := func() error {
+		c.connMu.Lock()
+		defer c.connMu.Unlock()
 
-	// Check if already connected
-	if c.conn != nil {
+		// Restore autoReconnect to the initial configured value
+		// This ensures that after a Disconnect()/Connect() cycle, auto-reconnect is re-enabled
+		c.internal.mu.Lock()
+		c.autoReconnect = c.autoReconnectConfig
+		c.internal.mu.Unlock()
+
+		// Check if already connected
+		if c.conn != nil {
+			c.internal.mu.RLock()
+			isClosed := c.internal.connClosed
+			c.internal.mu.RUnlock()
+
+			if !isClosed {
+				return errors.New("already connected")
+			}
+		}
+
+		// Check if we're reconnecting - if not, this must be a fresh connection
 		c.internal.mu.RLock()
-		isClosed := c.internal.connClosed
+		isReconnecting := c.internal.isReconnecting
 		c.internal.mu.RUnlock()
 
-		if !isClosed {
-			return errors.New("already connected")
+		// If not reconnecting and connection was previously closed, reject
+		if !isReconnecting {
+			c.internal.mu.RLock()
+			wasClosed := c.internal.connClosed
+			c.internal.mu.RUnlock()
+
+			if wasClosed && c.conn != nil {
+				return errors.New("connection was closed, create a new client")
+			}
 		}
-	}
 
-	// Check if we're reconnecting - if not, this must be a fresh connection
-	c.internal.mu.RLock()
-	isReconnecting := c.internal.isReconnecting
-	c.internal.mu.RUnlock()
+		c.logger.Debug("Connecting to %s (%s)", c.host, c.protocol.GetProtocolName())
 
-	// If not reconnecting and connection was previously closed, reject
-	if !isReconnecting {
-		c.internal.mu.RLock()
-		wasClosed := c.internal.connClosed
-		c.internal.mu.RUnlock()
-
-		if wasClosed && c.conn != nil {
-			return errors.New("connection was closed, create a new client")
+		// Establish WebSocket connection
+		dialer := websocket.Dialer{
+			HandshakeTimeout: 10 * time.Second,
 		}
-	}
 
-	c.logger.Debug("Connecting to %s (%s)", c.host, c.protocol.GetProtocolName())
+		// Configure proxy if provided
+		if c.proxyURL != nil {
+			dialer.Proxy = http.ProxyURL(c.proxyURL)
+			c.logger.Debug("Using proxy: %s", c.proxyURL.String())
+		}
 
-	// Establish WebSocket connection
-	dialer := websocket.Dialer{
-		HandshakeTimeout: 10 * time.Second,
-	}
+		conn, _, err := dialer.Dial(c.host, nil)
+		if err != nil {
+			return err
+		}
 
-	// Configure proxy if provided
-	if c.proxyURL != nil {
-		dialer.Proxy = http.ProxyURL(c.proxyURL)
-		c.logger.Debug("Using proxy: %s", c.proxyURL.String())
-	}
+		c.conn = conn
 
-	conn, _, err := dialer.Dial(c.host, nil)
+		// Reset connection state
+		c.internal.mu.Lock()
+		c.internal.connClosed = false
+		c.internal.mu.Unlock()
+
+		// Recreate write channel — ensures old writeLoop exits, unblocks any stale writers.
+		oldWriteChan := c.writeChan
+		c.writeChan = make(chan writeRequest, 100)
+		c.connCloseOnce = sync.Once{}
+		if oldWriteChan != nil {
+			close(oldWriteChan)
+		}
+
+		// Start goroutines
+		go c.pingLoop()
+		go c.readMessages()
+		go c.writeLoop()
+
+		onConnect = c.onConnectCallback
+		return nil
+	}()
 	if err != nil {
 		return err
 	}
 
-	c.conn = conn
-
-	// Reset connection state
-	c.internal.mu.Lock()
-	c.internal.connClosed = false
-	c.internal.mu.Unlock()
-
-	// Recreate write channel — ensures old writeLoop exits, unblocks any stale writers.
-	oldWriteChan := c.writeChan
-	c.writeChan = make(chan writeRequest, 100)
-	c.connCloseOnce = sync.Once{}
-	if oldWriteChan != nil {
-		close(oldWriteChan)
-	}
-
-	// Start goroutines
-	go c.pingLoop()
-	go c.readMessages()
-	go c.writeLoop()
-
-	// Call connect callback
-	if c.onConnectCallback != nil {
-		c.onConnectCallback()
+	// Notify after releasing connMu so callbacks can safely resubscribe/re-enter client APIs.
+	if onConnect != nil {
+		onConnect()
 	}
 
 	c.logger.Info("Connected to %s successfully", c.protocol.GetProtocolName())

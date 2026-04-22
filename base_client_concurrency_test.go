@@ -146,6 +146,66 @@ func TestBaseClientWriteLoopSurvivesRecoverableWriteError(t *testing.T) {
 	})
 }
 
+func TestBaseClientConnectDoesNotDeadlockWhenOnConnectSubscribes(t *testing.T) {
+	wsURL, cleanup, _, msgCh := newTestWebSocketServer(t)
+	defer cleanup()
+
+	callbackDone := make(chan error, 1)
+
+	var client *baseClient
+	client = newBaseClient(
+		NewRealtimeProtocol(),
+		WithHost(wsURL),
+		WithAutoReconnect(false),
+		WithLogger(NewSilentLogger()),
+		WithOnConnect(func() {
+			callbackDone <- client.subscribe([]Subscription{
+				{
+					Topic:   TopicCryptoPrices,
+					Type:    MessageTypeUpdate,
+					Filters: `{"symbol":"solusdt"}`,
+				},
+			})
+		}),
+	)
+
+	connectDone := make(chan error, 1)
+	go func() {
+		connectDone <- client.connect()
+	}()
+
+	select {
+	case err := <-connectDone:
+		if err != nil {
+			t.Fatalf("connect failed: %v", err)
+		}
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("connect blocked when the onConnect callback resubscribed")
+	}
+
+	select {
+	case err := <-callbackDone:
+		if err != nil {
+			t.Fatalf("onConnect subscribe failed: %v", err)
+		}
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("onConnect callback did not finish")
+	}
+
+	select {
+	case msg := <-msgCh:
+		if !strings.Contains(string(msg), `"action":"subscribe"`) {
+			t.Fatalf("unexpected subscription payload: %s", string(msg))
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for subscribe payload from onConnect callback")
+	}
+
+	if err := client.disconnect(); err != nil {
+		t.Fatalf("disconnect failed: %v", err)
+	}
+}
+
 func newTestWebSocketServer(t *testing.T) (string, func(), <-chan *websocket.Conn, <-chan []byte) {
 	t.Helper()
 
