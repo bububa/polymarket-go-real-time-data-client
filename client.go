@@ -240,6 +240,7 @@ func (c *Client) subscribeToClob(subscriptions []Subscription) error {
 	// Handle market subscriptions
 	if len(marketSubs) > 0 {
 		needsConnect := false
+		var marketClient *baseClient
 		c.clobMu.Lock()
 		if c.clobMarketClient == nil {
 			// Create CLOB market client on-demand
@@ -256,6 +257,7 @@ func (c *Client) subscribeToClob(subscriptions []Subscription) error {
 			c.clobMarketClient = newBaseClient(protocol, clobOpts...)
 			needsConnect = true
 		}
+		marketClient = c.clobMarketClient
 		// Release the lock BEFORE connect() to avoid re-entry deadlock:
 		// connect() fires onConnectCallback synchronously, which may call
 		// back into Subscribe() and attempt to re-acquire clobMu → deadlocks
@@ -263,7 +265,7 @@ func (c *Client) subscribeToClob(subscriptions []Subscription) error {
 		c.clobMu.Unlock()
 
 		if needsConnect {
-			if err := c.clobMarketClient.connect(); err != nil {
+			if err := marketClient.connect(); err != nil {
 				return fmt.Errorf("failed to connect to CLOB market endpoint: %w", err)
 			}
 			// Give the connection a moment to stabilize before subscribing
@@ -271,34 +273,32 @@ func (c *Client) subscribeToClob(subscriptions []Subscription) error {
 			time.Sleep(100 * time.Millisecond)
 
 			// Check if connection is still alive after the delay
-			c.clobMarketClient.connMu.RLock()
-			conn := c.clobMarketClient.conn
-			c.clobMarketClient.connMu.RUnlock()
+			marketClient.connMu.RLock()
+			conn := marketClient.conn
+			marketClient.connMu.RUnlock()
 
 			if conn == nil {
 				return fmt.Errorf("CLOB market connection closed immediately after connect")
 			}
 
-			c.clobMarketClient.internal.mu.RLock()
-			isClosed := c.clobMarketClient.internal.connClosed
-			c.clobMarketClient.internal.mu.RUnlock()
+			marketClient.internal.mu.RLock()
+			isClosed := marketClient.internal.connClosed
+			marketClient.internal.mu.RUnlock()
 
 			if isClosed {
 				return fmt.Errorf("CLOB market connection closed immediately after connect")
 			}
 		}
 
-		// Re-acquire the lock for the subscribe call
-		c.clobMu.Lock()
-		if err := c.clobMarketClient.subscribe(marketSubs); err != nil {
+		if err := marketClient.subscribe(marketSubs); err != nil {
 			errs = append(errs, fmt.Errorf("failed to subscribe to CLOB market: %w", err))
 		}
-		c.clobMu.Unlock()
 	}
 
 	// Handle user subscriptions
 	if len(userSubs) > 0 {
 		needsConnect := false
+		var userClient *baseClient
 		c.clobMu.Lock()
 		if c.clobUserClient == nil {
 			// Create CLOB user client on-demand
@@ -315,11 +315,12 @@ func (c *Client) subscribeToClob(subscriptions []Subscription) error {
 			c.clobUserClient = newBaseClient(protocol, clobOpts...)
 			needsConnect = true
 		}
+		userClient = c.clobUserClient
 		// Same lock-release-before-connect pattern as market subs above
 		c.clobMu.Unlock()
 
 		if needsConnect {
-			if err := c.clobUserClient.connect(); err != nil {
+			if err := userClient.connect(); err != nil {
 				return fmt.Errorf("failed to connect to CLOB user endpoint: %w", err)
 			}
 
@@ -327,12 +328,9 @@ func (c *Client) subscribeToClob(subscriptions []Subscription) error {
 			// This may require sending auth message after connection
 		}
 
-		// Re-acquire the lock for the subscribe call
-		c.clobMu.Lock()
-		if err := c.clobUserClient.subscribe(userSubs); err != nil {
+		if err := userClient.subscribe(userSubs); err != nil {
 			errs = append(errs, fmt.Errorf("failed to subscribe to CLOB user: %w", err))
 		}
-		c.clobMu.Unlock()
 	}
 
 	if len(errs) > 0 {
@@ -358,20 +356,22 @@ func (c *Client) unsubscribeFromClob(subscriptions []Subscription) error {
 	}
 
 	c.clobMu.Lock()
-	defer c.clobMu.Unlock()
+	marketClient := c.clobMarketClient
+	userClient := c.clobUserClient
+	c.clobMu.Unlock()
 
 	var errs []error
 
 	// Handle market unsubscriptions
-	if len(marketSubs) > 0 && c.clobMarketClient != nil {
-		if err := c.clobMarketClient.unsubscribe(marketSubs); err != nil {
+	if len(marketSubs) > 0 && marketClient != nil {
+		if err := marketClient.unsubscribe(marketSubs); err != nil {
 			errs = append(errs, fmt.Errorf("failed to unsubscribe from CLOB market: %w", err))
 		}
 	}
 
 	// Handle user unsubscriptions
-	if len(userSubs) > 0 && c.clobUserClient != nil {
-		if err := c.clobUserClient.unsubscribe(userSubs); err != nil {
+	if len(userSubs) > 0 && userClient != nil {
+		if err := userClient.unsubscribe(userSubs); err != nil {
 			errs = append(errs, fmt.Errorf("failed to unsubscribe from CLOB user: %w", err))
 		}
 	}
