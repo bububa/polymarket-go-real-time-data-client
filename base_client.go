@@ -3,6 +3,7 @@ package polymarketrealtime
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -61,11 +62,10 @@ type baseClient struct {
 	}
 
 	// Channels for control flow
-	closeChan chan struct{}
-	closeOnce sync.Once
-
-	writeLoopOnce sync.Once
-	writeChan     chan writeRequest // Channel for serializing WebSocket writes
+	closeChan     chan struct{}
+	closeOnce     sync.Once
+	connCloseOnce sync.Once
+	writeChan     chan writeRequest // Channel for serializing WebSocket writes (recreated on each connect)
 }
 
 // newBaseClient creates a new base client with the given protocol and options
@@ -92,7 +92,6 @@ func newBaseClient(protocol Protocol, opts ...ClientOption) *baseClient {
 	c := &baseClient{
 		protocol:             protocol,
 		closeChan:            make(chan struct{}),
-		writeChan:            make(chan writeRequest, 100), // Buffered channel for writes
 		host:                 config.Host,
 		logger:               config.Logger,
 		pingInterval:         config.PingInterval,
@@ -177,6 +176,14 @@ func (c *baseClient) connect() error {
 	c.internal.connClosed = false
 	c.internal.mu.Unlock()
 
+	// Recreate write channel — ensures old writeLoop exits, unblocks any stale writers.
+	oldWriteChan := c.writeChan
+	c.writeChan = make(chan writeRequest, 100)
+	c.connCloseOnce = sync.Once{}
+	if oldWriteChan != nil {
+		close(oldWriteChan)
+	}
+
 	// Start goroutines
 	go c.pingLoop()
 	go c.readMessages()
@@ -216,18 +223,22 @@ func (c *baseClient) disconnect() error {
 
 	c.logger.Debug("Disconnecting from %s", c.protocol.GetProtocolName())
 
-	// Close the connection
+	// Best-effort close frame so disconnect never blocks on a saturated write queue.
+	if err := c.conn.WriteControl(
+		websocket.CloseMessage,
+		websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""),
+		time.Now().Add(c.writeTimeout),
+	); err != nil {
+		c.logger.Debug("Failed to send close control frame: %v", err)
+	}
+
+	// Close background loops and mark the connection as closed.
 	c.closeOnce.Do(func() {
 		close(c.closeChan)
 	})
-
-	// Mark as closed
 	c.internal.mu.Lock()
 	c.internal.connClosed = true
 	c.internal.mu.Unlock()
-
-	// Send close message
-	c.writeChan <- writeRequest{websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, "")}
 
 	// Close connection
 	err := c.conn.Close()
@@ -297,12 +308,12 @@ func (c *baseClient) subscribe(subscriptions []Subscription) error {
 
 		c.logger.Debug("Sending subscription message: %s", string(message))
 
-		// Send subscription through write channel
-		select {
-		case c.writeChan <- writeRequest{messageType: websocket.TextMessage, data: message}:
-			// Success
-		case <-time.After(5 * time.Second):
-			return errors.New("timeout sending subscription message")
+		if err := c.enqueueWrite(
+			writeRequest{messageType: websocket.TextMessage, data: message},
+			5*time.Second,
+			"sending subscription message",
+		); err != nil {
+			return err
 		}
 	}
 
@@ -336,13 +347,14 @@ func (c *baseClient) unsubscribe(subscriptions []Subscription) error {
 
 	c.logger.Debug("Sending unsubscription message: %s", string(unsubMessage))
 
-	// Send unsubscription through write channel
-	select {
-	case c.writeChan <- writeRequest{messageType: websocket.TextMessage, data: unsubMessage}:
-		c.logger.Debug("Unsubscription message sent")
-	case <-time.After(5 * time.Second):
-		return errors.New("timeout sending unsubscription message")
+	if err := c.enqueueWrite(
+		writeRequest{messageType: websocket.TextMessage, data: unsubMessage},
+		5*time.Second,
+		"sending unsubscription message",
+	); err != nil {
+		return err
 	}
+	c.logger.Debug("Unsubscription message sent")
 
 	// Remove subscriptions from stored list
 	c.internal.mu.Lock()
@@ -401,9 +413,17 @@ func (c *baseClient) pingLoop() {
 
 func (c *baseClient) ping() {
 	// Try all of these to check if the connection will not be closed abnormal.
-	c.writeChan <- writeRequest{websocket.TextMessage, []byte("ping")}
-	c.writeChan <- writeRequest{websocket.PingMessage, []byte("ping")}
-	c.writeChan <- writeRequest{websocket.PingMessage, nil}
+	requests := []writeRequest{
+		{messageType: websocket.TextMessage, data: []byte("ping")},
+		{messageType: websocket.PingMessage, data: []byte("ping")},
+		{messageType: websocket.PingMessage, data: nil},
+	}
+
+	for _, req := range requests {
+		if err := c.enqueueWrite(req, 0, "sending ping message"); err != nil {
+			c.logger.Debug("Skipping ping write: %v", err)
+		}
+	}
 
 	// c.writeChan <- writeRequest{websocket.PongMessage, []byte("pong")}
 
@@ -413,52 +433,76 @@ func (c *baseClient) ping() {
 	// c.logger.Debug("Ping sent")
 }
 
-// writeLoop serializes all WebSocket writes through a channel
+// writeLoop serializes all WebSocket writes through a channel.
 func (c *baseClient) writeLoop() {
-	c.writeLoopOnce.Do(func() {
-		defer func() {
-			c.logger.Debug("Write loop stopped")
-		}()
+	defer func() {
+		c.logger.Debug("Write loop stopped")
+	}()
 
-		for {
-			select {
-			case <-c.closeChan:
+	for {
+		select {
+		case <-c.closeChan:
+			return
+		case req, ok := <-c.writeChan:
+			if !ok {
 				return
-			case req := <-c.writeChan:
-				c.connMu.RLock()
-				conn := c.conn
-				c.connMu.RUnlock()
+			}
+			c.connMu.RLock()
+			conn := c.conn
+			c.connMu.RUnlock()
 
-				if conn == nil {
-					c.logger.Debug("Skipping write, connection is nil")
-					continue
-				}
+			if conn == nil {
+				c.logger.Debug("Skipping write, connection is nil")
+				continue
+			}
 
-				c.internal.mu.RLock()
-				isClosed := c.internal.connClosed
-				c.internal.mu.RUnlock()
+			c.internal.mu.RLock()
+			isClosed := c.internal.connClosed
+			c.internal.mu.RUnlock()
 
-				if isClosed {
-					c.logger.Debug("Skipping write, connection is closed")
-					continue
-				}
+			if isClosed {
+				c.logger.Debug("Skipping write, connection is closed")
+				continue
+			}
 
-				c.logger.Debug("Write message %v: %v", req.messageType, string(req.data))
+			c.logger.Debug("Write message %v: %v", req.messageType, string(req.data))
 
-				conn.SetWriteDeadline(time.Now().Add(c.writeTimeout))
-				err := conn.WriteMessage(req.messageType, req.data)
-				if err != nil {
-					c.logger.Error("Error writing message (type=%d): %v", req.messageType, err)
-					// Check if this is a recoverable connection error
-					if c.isRecoverableError(err) {
-						c.logger.Info("Write error is recoverable, triggering reconnection")
-						c.tryAutoReconnect(err)
-						return
-					}
+			conn.SetWriteDeadline(time.Now().Add(c.writeTimeout))
+			err := conn.WriteMessage(req.messageType, req.data)
+			if err != nil {
+				c.logger.Error("Error writing message (type=%d): %v", req.messageType, err)
+				if c.isRecoverableError(err) {
+					c.logger.Info("Write error is recoverable, triggering reconnection")
+					c.tryAutoReconnect(err)
 				}
 			}
 		}
-	})
+	}
+}
+
+func (c *baseClient) enqueueWrite(req writeRequest, timeout time.Duration, action string) error {
+	if timeout <= 0 {
+		select {
+		case <-c.closeChan:
+			return fmt.Errorf("%s aborted: connection is closing", action)
+		case c.writeChan <- req:
+			return nil
+		default:
+			return fmt.Errorf("%s dropped: write channel full", action)
+		}
+	}
+
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+
+	select {
+	case <-c.closeChan:
+		return fmt.Errorf("%s aborted: connection is closing", action)
+	case c.writeChan <- req:
+		return nil
+	case <-timer.C:
+		return fmt.Errorf("timeout %s", action)
+	}
 }
 
 // readMessages reads messages from the WebSocket connection
