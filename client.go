@@ -237,11 +237,10 @@ func (c *Client) subscribeToClob(subscriptions []Subscription) error {
 
 	var errs []error
 
-	c.clobMu.Lock()
-	defer c.clobMu.Unlock()
-
 	// Handle market subscriptions
 	if len(marketSubs) > 0 {
+		needsConnect := false
+		c.clobMu.Lock()
 		if c.clobMarketClient == nil {
 			// Create CLOB market client on-demand
 			protocol := NewClobProtocol(ClobEndpointMarket)
@@ -255,6 +254,15 @@ func (c *Client) subscribeToClob(subscriptions []Subscription) error {
 				clobOpts = append(clobOpts, withRouter(c.router))
 			}
 			c.clobMarketClient = newBaseClient(protocol, clobOpts...)
+			needsConnect = true
+		}
+		// Release the lock BEFORE connect() to avoid re-entry deadlock:
+		// connect() fires onConnectCallback synchronously, which may call
+		// back into Subscribe() and attempt to re-acquire clobMu → deadlocks
+		// if we hold the lock here.
+		c.clobMu.Unlock()
+
+		if needsConnect {
 			if err := c.clobMarketClient.connect(); err != nil {
 				return fmt.Errorf("failed to connect to CLOB market endpoint: %w", err)
 			}
@@ -280,14 +288,18 @@ func (c *Client) subscribeToClob(subscriptions []Subscription) error {
 			}
 		}
 
-		// Use baseClient's subscribe method which handles formatting and sending
+		// Re-acquire the lock for the subscribe call
+		c.clobMu.Lock()
 		if err := c.clobMarketClient.subscribe(marketSubs); err != nil {
 			errs = append(errs, fmt.Errorf("failed to subscribe to CLOB market: %w", err))
 		}
+		c.clobMu.Unlock()
 	}
 
 	// Handle user subscriptions
 	if len(userSubs) > 0 {
+		needsConnect := false
+		c.clobMu.Lock()
 		if c.clobUserClient == nil {
 			// Create CLOB user client on-demand
 			protocol := NewClobProtocol(ClobEndpointUser)
@@ -301,6 +313,12 @@ func (c *Client) subscribeToClob(subscriptions []Subscription) error {
 				clobOpts = append(clobOpts, withRouter(c.router))
 			}
 			c.clobUserClient = newBaseClient(protocol, clobOpts...)
+			needsConnect = true
+		}
+		// Same lock-release-before-connect pattern as market subs above
+		c.clobMu.Unlock()
+
+		if needsConnect {
 			if err := c.clobUserClient.connect(); err != nil {
 				return fmt.Errorf("failed to connect to CLOB user endpoint: %w", err)
 			}
@@ -309,10 +327,12 @@ func (c *Client) subscribeToClob(subscriptions []Subscription) error {
 			// This may require sending auth message after connection
 		}
 
-		// Use baseClient's subscribe method which handles formatting and sending
+		// Re-acquire the lock for the subscribe call
+		c.clobMu.Lock()
 		if err := c.clobUserClient.subscribe(userSubs); err != nil {
 			errs = append(errs, fmt.Errorf("failed to subscribe to CLOB user: %w", err))
 		}
+		c.clobMu.Unlock()
 	}
 
 	if len(errs) > 0 {
